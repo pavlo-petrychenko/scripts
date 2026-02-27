@@ -26,9 +26,12 @@ if [ -n "${TMUX:-}" ]; then
   current_window=$(tmux display-message -p '#W' 2>/dev/null || true)
 fi
 
+# Get VS Code open folders (one ps call for all)
+vscode_windows=$(ps -eo args= | grep "[E]lectron.*/" || true)
+
 # Header
-printf "  %-18s %-11s %-6s %-7s %-16s %s\n" "NAME" "BRANCH" "TMUX" "DIRTY" "LAST COMMIT" "RAM"
-printf "  %-18s %-11s %-6s %-7s %-16s %s\n" "----" "------" "----" "-----" "-----------" "---"
+printf "  %-18s %-11s %-6s %-6s %-7s %s\n" "NAME" "BRANCH" "TMUX" "CODE" "DIRTY" "LAST COMMIT"
+printf "  %-18s %-11s %-6s %-6s %-7s %s\n" "----" "------" "----" "----" "-----" "-----------"
 
 while IFS= read -r dir; do
   [ -z "$dir" ] && continue
@@ -67,17 +70,11 @@ while IFS= read -r dir; do
   # Last commit age
   last_commit=$(cd "$dir" && git log -1 --format="%cr" 2>/dev/null || echo "???")
 
-  # RAM usage — sum RSS of processes whose command line contains this directory
-  pids=$(pgrep -f "$dir" 2>/dev/null || true)
-  ram="-"
-  if [ -n "$pids" ]; then
-    ram_kb=$(echo "$pids" | xargs ps -o rss= -p 2>/dev/null | awk '{sum += $1} END {print sum+0}')
-    if [ "$ram_kb" -gt 1048576 ]; then
-      ram=$(awk "BEGIN {printf \"%.1fG\", $ram_kb/1048576}")
-    elif [ "$ram_kb" -gt 0 ]; then
-      ram=$(awk "BEGIN {printf \"%.0fM\", $ram_kb/1024}")
-    fi
+  # VS Code
+  vscode="-"
+  if echo "$vscode_windows" | grep -qF "$dir"; then
+    vscode="open"
   fi
 
-  printf "%s%-18s %-11s %-6s %-7s %-16s %s\n" "$marker" "$name" "$branch" "$tmux_status" "$dirty" "$last_commit" "$ram"
+  printf "%s%-18s %-11s %-6s %-6s %-7s %s\n" "$marker" "$name" "$branch" "$tmux_status" "$vscode" "$dirty" "$last_commit"
 done <<< "$all_dirs"
