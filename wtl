@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# wtl - list all worktrees with branch, tmux status, and disk usage
+
+set -euo pipefail
+
+repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || {
+  echo "Error: not inside a git repo"
+  exit 1
+}
+
+parent_dir=$(dirname "$repo_root")
+main_repo="$parent_dir/website"
+
+# Collect all dirs: main repo first, then worktrees
+all_dirs="$main_repo"
+worktree_dirs=$(ls -d "$parent_dir"/website-* 2>/dev/null || true)
+if [ -n "$worktree_dirs" ]; then
+  all_dirs="$all_dirs"$'\n'"$worktree_dirs"
+fi
+
+# Get open tmux windows
+open_windows=""
+if [ -n "${TMUX:-}" ]; then
+  open_windows=$(tmux list-windows -F '#W' 2>/dev/null || true)
+fi
+
+# Header
+printf "%-20s %-30s %-8s %s\n" "NAME" "BRANCH" "TMUX" "DISK"
+printf "%-20s %-30s %-8s %s\n" "----" "------" "----" "----"
+
+while IFS= read -r dir; do
+  [ -z "$dir" ] && continue
+
+  basename=$(basename "$dir")
+  if [ "$basename" = "website" ]; then
+    name="website"
+  else
+    name=$(echo "$basename" | sed 's/^website-//')
+  fi
+
+  # Get branch
+  branch=$(cd "$dir" && git branch --show-current 2>/dev/null || echo "???")
+
+  # Check tmux
+  tmux_status="-"
+  if echo "$open_windows" | grep -qx "$name"; then
+    tmux_status="open"
+  fi
+
+  # Disk usage (excluding node_modules for speed)
+  disk=$(du -sh "$dir" 2>/dev/null | awk '{print $1}' || echo "???")
+
+  printf "%-20s %-30s %-8s %s\n" "$name" "$branch" "$tmux_status" "$disk"
+done <<< "$all_dirs"

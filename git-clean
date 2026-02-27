@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+# git-clean - interactively delete local branches that are merged or gone from remote
+# Usage: git-clean
+
+set -euo pipefail
+
+if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  echo "Error: not inside a git repo"
+  exit 1
+fi
+
+# Fetch latest remote state and prune stale tracking refs
+git fetch --prune --quiet
+
+protected="master|main|develop|staging"
+current_branch=$(git branch --show-current)
+
+# Collect deletable branches with context
+candidates=""
+
+# 1. Branches merged into master
+while IFS= read -r branch; do
+  branch=$(echo "$branch" | xargs)
+  [ -z "$branch" ] && continue
+  [[ "$branch" =~ ^($protected)$ ]] && continue
+  [ "$branch" = "$current_branch" ] && continue
+
+  date=$(git log -1 --format="%cr" "$branch" 2>/dev/null || echo "???")
+  candidates+="$branch  (merged, $date)"$'\n'
+done < <(git branch --merged master --format='%(refname:short)' 2>/dev/null)
+
+# 2. Branches whose remote tracking is gone
+while IFS= read -r line; do
+  branch=$(echo "$line" | sed 's/^[[:space:]]*//' | awk '{print $1}')
+  [ -z "$branch" ] && continue
+  [[ "$branch" =~ ^($protected)$ ]] && continue
+  [ "$branch" = "$current_branch" ] && continue
+
+  # Skip if already in candidates
+  echo "$candidates" | grep -q "^$branch " && continue
+
+  date=$(git log -1 --format="%cr" "$branch" 2>/dev/null || echo "???")
+  candidates+="$branch  (gone from remote, $date)"$'\n'
+done < <(git branch -vv | grep ': gone]')
+
+# 3. Branches with no remote at all and older than 2 weeks
+while IFS= read -r branch; do
+  branch=$(echo "$branch" | xargs)
+  [ -z "$branch" ] && continue
+  [[ "$branch" =~ ^($protected)$ ]] && continue
+  [ "$branch" = "$current_branch" ] && continue
+
+  # Skip if already in candidates
+  echo "$candidates" | grep -q "^$branch " && continue
+
+  # Skip if has a remote tracking branch
+  git config "branch.$branch.remote" >/dev/null 2>&1 && continue
+
+  timestamp=$(git log -1 --format="%ct" "$branch" 2>/dev/null || echo "0")
+  two_weeks_ago=$(date -v-2w +%s 2>/dev/null || date -d '2 weeks ago' +%s 2>/dev/null || echo "0")
+  [ "$timestamp" -gt "$two_weeks_ago" ] && continue
+
+  date=$(git log -1 --format="%cr" "$branch" 2>/dev/null || echo "???")
+  candidates+="$branch  (no remote, $date)"$'\n'
+done < <(git branch --format='%(refname:short)')
+
+candidates=$(echo "$candidates" | sed '/^$/d')
+
+if [ -z "$candidates" ]; then
+  echo "No branches to clean up"
+  exit 0
+fi
+
+echo "Select branches to delete (Tab to select, Enter to confirm):"
+echo ""
+
+selected=$(echo "$candidates" | fzf --multi --prompt="Delete branches: " --height=60% --reverse) || exit 0
+
+if [ -z "$selected" ]; then
+  exit 0
+fi
+
+# Extract branch names and delete
+count=0
+while IFS= read -r line; do
+  branch=$(echo "$line" | awk '{print $1}')
+  [ -z "$branch" ] && continue
+
+  if git branch -D "$branch" 2>/dev/null; then
+    echo "Deleted: $branch"
+    ((count++))
+  else
+    echo "Failed to delete: $branch"
+  fi
+done <<< "$selected"
+
+echo ""
+echo "Cleaned up $count branch(es)"

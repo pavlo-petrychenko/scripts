@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# wtc - open VS Code in current worktree directory
+# Usage: wtc
+
+if [ -n "${TMUX:-}" ]; then
+  dir=$(tmux display-message -p '#{pane_current_path}')
+else
+  dir=$(pwd)
+fi
+
+code "$dir"

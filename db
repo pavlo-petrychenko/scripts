@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# db - open a database connection in a dedicated tmux window
+# Usage: db <dev|stage|prod>
+
+set -euo pipefail
+
+env="${1:?Usage: db <dev|stage|prod>}"
+
+case "$env" in
+  dev)   window_name="db-dev";  target="db-development" ;;
+  stage) window_name="db-stage"; target="db-staging" ;;
+  prod)  window_name="db-prod";  target="db-production" ;;
+  *)     echo "Unknown env: $env"; exit 1 ;;
+esac
+
+website_dir="$HOME/Desktop/project/website"
+
+# Switch to window if it already exists
+if tmux list-windows -F '#W' | grep -qx "$window_name"; then
+  tmux select-window -t "$window_name"
+  exit 0
+fi
+
+# Create new window and run db command
+tmux new-window -n "$window_name" -c "$website_dir"
+tmux send-keys "make $target" Enter

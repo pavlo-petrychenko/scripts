@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# wtm - mobile development worktree with tmux 3-pane layout
+# Usage: wtm
+#
+# Creates a "mobile" worktree (or reuses existing), sets up tmux with:
+# ┌──────────┬──────────┐
+# │  agent   │   root   │
+# ├──────────┴──────────┤
+# │       metro         │
+# └─────────────────────┘
+#
+# On first run: installs mobile deps, runs pod install, then starts dev servers.
+# On subsequent runs: opens/switches to the existing tmux window.
+
+set -euo pipefail
+
+name="mobile"
+
+repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || {
+  echo "Error: not inside a git repo"
+  exit 1
+}
+
+worktree_dir="$repo_root/../website-$name"
+
+# Create worktree and install deps if it doesn't exist
+if [ ! -d "$worktree_dir" ]; then
+  make -C "$repo_root" worktree branch="$name" folder="$name" flags="--no-install"
+
+  worktree_dir=$(cd "$worktree_dir" && pwd)
+  mobile_dir="$worktree_dir/mobile"
+
+  echo "Installing mobile dependencies..."
+  (cd "$mobile_dir" && npm ci)
+
+  echo "Running pod install..."
+  (cd "$mobile_dir/ios" && pod install)
+else
+  worktree_dir=$(cd "$worktree_dir" && pwd)
+  mobile_dir="$worktree_dir/mobile"
+fi
+
+start_dev_servers() {
+  local target="$1"
+  tmux send-keys -t "${target}.3" "cd $mobile_dir && npm run start" Enter
+  tmux send-keys -t "${target}.2" "cd $mobile_dir && npm run ios; npm run android:local" Enter
+}
+
+# If not inside tmux, start a new session
+if [ -z "${TMUX:-}" ]; then
+  tmux new-session -s "$name" -n "$name" -c "$mobile_dir" \; \
+    select-pane -T "agent" \; \
+    split-window -h -c "$mobile_dir" \; \
+    select-pane -T "root" \; \
+    select-pane -t 1 \; \
+    split-window -v -f -c "$mobile_dir" -l 30% \; \
+    select-pane -T "metro" \; \
+    select-pane -t 1
+
+  start_dev_servers "$name:$name"
+  exit 0
+fi
+
+# Inside tmux — switch to window if it already exists
+if tmux list-windows -F '#W' | grep -qx "$name"; then
+  tmux select-window -t "$name"
+  exit 0
+fi
+
+# Create new window with 3-pane layout
+session=$(tmux display-message -p '#S')
+
+tmux new-window -n "$name" -c "$mobile_dir"
+tmux select-pane -T "agent"
+tmux split-window -h -c "$mobile_dir"
+tmux select-pane -T "root"
+tmux select-pane -t 1
+tmux split-window -v -f -c "$mobile_dir" -l 30%
+tmux select-pane -T "metro"
+tmux select-pane -t 1
+
+start_dev_servers "${session}:${name}"

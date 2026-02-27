@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# wts - switch to a worktree via fzf picker
+# Opens/switches to a tmux window with the 3-pane layout
+
+set -euo pipefail
+
+repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || {
+  echo "Error: not inside a git repo"
+  exit 1
+}
+
+parent_dir=$(dirname "$repo_root")
+
+# List main repo + worktrees
+worktrees="website"
+extra=$(ls -d "$parent_dir"/website-* 2>/dev/null | xargs -I{} basename {} | sed 's/^website-//' || true)
+if [ -n "$extra" ]; then
+  worktrees="$worktrees"$'\n'"$extra"
+fi
+
+# Mark which ones have tmux windows open
+labeled=""
+open_windows=""
+if [ -n "${TMUX:-}" ]; then
+  open_windows=$(tmux list-windows -F '#W' 2>/dev/null || true)
+fi
+
+while IFS= read -r name; do
+  if echo "$open_windows" | grep -qx "$name"; then
+    labeled+="$name  [open]"$'\n'
+  else
+    labeled+="$name"$'\n'
+  fi
+done <<< "$worktrees"
+
+# Pick with fzf
+selection=$(echo "$labeled" | sed '/^$/d' | fzf --prompt="Worktree: " --height=40% --reverse --ansi) || exit 0
+name=$(echo "$selection" | awk '{print $1}')
+
+if [ -z "$name" ]; then
+  exit 0
+fi
+
+if [ "$name" = "website" ]; then
+  worktree_dir=$(cd "$parent_dir/website" && pwd)
+else
+  worktree_dir=$(cd "$parent_dir/website-$name" && pwd)
+fi
+
+# Not in tmux — just print the path
+if [ -z "${TMUX:-}" ]; then
+  echo "$worktree_dir"
+  exit 0
+fi
+
+# If window exists, switch to it
+if tmux list-windows -F '#W' | grep -qx "$name"; then
+  tmux select-window -t "$name"
+  exit 0
+fi
+
+# Create new window with 3-pane layout
+tmux new-window -n "$name" -c "$worktree_dir"
+tmux select-pane -T "agent"
+tmux split-window -h -c "$worktree_dir"
+tmux select-pane -T "root"
+tmux select-pane -t 1
+tmux split-window -v -f -c "$worktree_dir" -l 30%
+tmux select-pane -T "logs"
+tmux select-pane -t 1

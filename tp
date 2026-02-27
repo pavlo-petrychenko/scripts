@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# tp - tmux project launcher with 3-pane layout
+# Usage: tp <project-name> <project-path>
+#
+# Layout:
+# ┌──────────┬──────────┐
+# │  agent   │   root   │
+# ├──────────┴──────────┤
+# │        logs         │
+# └─────────────────────┘
+
+name="${1:?Usage: tp <name> <path>}"
+path="${2:?Usage: tp <name> <path>}"
+path=$(cd "$path" 2>/dev/null && pwd)
+
+if tmux has-session -t "$name" 2>/dev/null; then
+  tmux switch-client -t "$name" 2>/dev/null || tmux attach -t "$name"
+  exit 0
+fi
+
+# Create session — agent pane (top-left)
+tmux new-session -d -s "$name" -c "$path"
+tmux select-pane -T "agent"
+
+# Split right — root (top-right)
+tmux split-window -h -c "$path"
+tmux select-pane -T "root"
+
+# Split below full-width — logs (bottom)
+tmux select-pane -t 1
+tmux split-window -v -f -c "$path" -l 30%
+tmux select-pane -T "logs"
+
+# Focus agent pane
+tmux select-pane -t 1
+
+# Attach
+tmux switch-client -t "$name" 2>/dev/null || tmux attach -t "$name"

@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# seed-changed - undo changed seeders then re-seed all
+# Finds modified/new seeders via git in the current worktree,
+# copies them to the api container, undoes each, then seeds all
+
+set -euo pipefail
+
+repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || {
+  echo "Error: not inside a git repo"
+  exit 1
+}
+
+cd "$repo_root"
+
+# Find changed seeder files (staged + unstaged + untracked)
+changed=$(git diff --name-only HEAD -- api/seeders/ 2>/dev/null || true)
+staged=$(git diff --name-only --cached -- api/seeders/ 2>/dev/null || true)
+untracked=$(git ls-files --others --exclude-standard -- api/seeders/ 2>/dev/null || true)
+
+all_changed=$(echo -e "$changed\n$staged\n$untracked" | sort -u | sed '/^$/d')
+
+if [ -z "$all_changed" ]; then
+  echo "No changed seeders found"
+  exit 0
+fi
+
+echo "Changed seeders:"
+echo "$all_changed" | while IFS= read -r file; do
+  echo "  $file"
+done
+echo ""
+
+# Copy changed seeders into the api container
+echo "Copying seeders to api container..."
+echo "$all_changed" | while IFS= read -r file; do
+  [ -z "$file" ] && continue
+  container_path=$(echo "$file" | sed 's|^api/||')
+  docker cp "$repo_root/$file" "website-api:/app/$container_path"
+done
+
+# Undo each changed seeder
+echo "$all_changed" | while IFS= read -r file; do
+  [ -z "$file" ] && continue
+  seeder_name=$(basename "$file")
+  echo "Undoing: $seeder_name"
+  docker exec website-api npx sequelize db:seed:undo --seed "$seeder_name" || true
+done
+
+echo ""
+echo "Running all seeders..."
+docker exec website-api npx sequelize db:seed:all

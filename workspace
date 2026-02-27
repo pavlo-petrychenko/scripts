@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# workspace - launch all projects
+# Edit the list below with your projects
+
+projects=(
+  "api:$HOME/projects/api"
+  "web:$HOME/projects/web"
+  "infra:$HOME/projects/infra"
+)
+
+# Start tmux server if not running
+tmux start-server
+
+for entry in "${projects[@]}"; do
+  name="${entry%%:*}"
+  path="${entry#*:}"
+  [ -d "$path" ] && tp "$name" "$path"
+done
+
+# Attach to first project
+first="${projects[0]%%:*}"
+tmux attach -t "$first"

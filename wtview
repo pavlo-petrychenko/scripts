@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+# wtview - spin up a worktree's dev environment and open the app in browser
+# Picks a worktree via fzf, ensures the tmux 3-pane layout,
+# sends `make run` to the logs pane, and opens the browser once ready.
+
+set -euo pipefail
+
+repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || {
+  echo "Error: not inside a git repo"
+  exit 1
+}
+
+parent_dir=$(dirname "$repo_root")
+
+# ── List main repo + worktrees ──
+worktrees="website"
+extra=$(ls -d "$parent_dir"/website-* 2>/dev/null | xargs -I{} basename {} | sed 's/^website-//' || true)
+if [ -n "$extra" ]; then
+  worktrees="$worktrees"$'\n'"$extra"
+fi
+
+# ── Mark which ones have tmux windows open ──
+labeled=""
+open_windows=""
+if [ -n "${TMUX:-}" ]; then
+  open_windows=$(tmux list-windows -F '#W' 2>/dev/null || true)
+fi
+
+while IFS= read -r name; do
+  if echo "$open_windows" | grep -qx "$name"; then
+    labeled+="$name  [open]"$'\n'
+  else
+    labeled+="$name"$'\n'
+  fi
+done <<< "$worktrees"
+
+# ── Pick with fzf ──
+selection=$(echo "$labeled" | sed '/^$/d' | fzf --prompt="Worktree (view): " --height=40% --reverse --ansi) || exit 0
+name=$(echo "$selection" | awk '{print $1}')
+
+if [ -z "$name" ]; then
+  exit 0
+fi
+
+if [ "$name" = "website" ]; then
+  worktree_dir=$(cd "$parent_dir/website" && pwd)
+else
+  worktree_dir=$(cd "$parent_dir/website-$name" && pwd)
+fi
+
+# ── Must be inside tmux ──
+if [ -z "${TMUX:-}" ]; then
+  echo "Error: wtview must be run inside tmux"
+  exit 1
+fi
+
+session=$(tmux display-message -p '#S')
+
+# ── Switch to / create the tmux window ──
+if tmux list-windows -F '#W' | grep -qx "$name"; then
+  tmux select-window -t "$name"
+else
+  tmux new-window -n "$name" -c "$worktree_dir"
+  tmux select-pane -T "agent"
+  tmux split-window -h -c "$worktree_dir"
+  tmux select-pane -T "root"
+  tmux select-pane -t 1
+  tmux split-window -v -f -c "$worktree_dir" -l 30%
+  tmux select-pane -T "logs"
+  tmux select-pane -t 1
+fi
+
+# ── Stop whatever is running in the logs pane, then send `make run` ──
+logs_pane="${session}:${name}.3"
+tmux send-keys -t "$logs_pane" C-c
+sleep 1
+tmux send-keys -t "$logs_pane" "make run" Enter
+
+# ── After a brief delay, send `y` to auto-confirm the directory prompt ──
+sleep 3
+tmux send-keys -t "$logs_pane" "y" Enter
+
+# ── Poll for readiness ──
+ready_string="Frontend server is ready at http://localhost:5050"
+max_wait=120  # seconds
+interval=2
+elapsed=0
+
+echo "Waiting for frontend to be ready (up to ${max_wait}s)..."
+
+while [ "$elapsed" -lt "$max_wait" ]; do
+  pane_content=$(tmux capture-pane -t "$logs_pane" -p 2>/dev/null || true)
+  if echo "$pane_content" | grep -qF "$ready_string"; then
+    echo "Frontend is ready! Opening browser..."
+    open "https://local.mate.academy/en/home"
+    exit 0
+  fi
+  sleep "$interval"
+  elapsed=$((elapsed + interval))
+done
+
+echo "Error: timed out after ${max_wait}s waiting for frontend to be ready"
+exit 1

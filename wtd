@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# wtd - remove current worktree and close tmux window
+# Must be run from inside a worktree's tmux window
+
+set -euo pipefail
+
+if [ -z "${TMUX:-}" ]; then
+  echo "Error: not inside tmux"
+  exit 1
+fi
+
+window_name=$(tmux display-message -p '#W')
+window_id=$(tmux display-message -p '#{window_id}')
+
+repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || {
+  echo "Error: not inside a git repo"
+  exit 1
+}
+
+main_repo="$(dirname "$repo_root")/website"
+
+if [ ! -d "$main_repo" ]; then
+  echo "Error: main repo not found at $main_repo"
+  exit 1
+fi
+
+# Confirm
+echo "Remove worktree: website-$window_name (branch: $window_name)"
+read -p "Are you sure? (y/N) " confirm
+if [[ "$confirm" != [yY] ]]; then
+  echo "Cancelled"
+  exit 0
+fi
+
+# Kill all panes except current to stop running processes
+tmux kill-pane -a -t "$window_id" 2>/dev/null || true
+
+# Move out of the worktree
+cd "$main_repo"
+
+# Remove worktree and branch
+make worktree-remove name="$window_name"
+
+# Kill this tmux window
+tmux kill-window -t "$window_id"

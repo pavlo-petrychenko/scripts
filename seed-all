@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# seed-all - run all seeders inside the api container
+
+set -euo pipefail
+
+echo "Running all seeders..."
+docker exec website-api npx sequelize db:seed:all
