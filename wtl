@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# wtl - list all worktrees with branch, tmux status, and disk usage
+# wtl - list all worktrees with branch, status, and resource info
 
 set -euo pipefail
 
@@ -18,15 +18,17 @@ if [ -n "$worktree_dirs" ]; then
   all_dirs="$all_dirs"$'\n'"$worktree_dirs"
 fi
 
-# Get open tmux windows
+# Get tmux info
 open_windows=""
+current_window=""
 if [ -n "${TMUX:-}" ]; then
   open_windows=$(tmux list-windows -F '#W' 2>/dev/null || true)
+  current_window=$(tmux display-message -p '#W' 2>/dev/null || true)
 fi
 
 # Header
-printf "%-20s %-30s %-8s %s\n" "NAME" "BRANCH" "TMUX" "DISK"
-printf "%-20s %-30s %-8s %s\n" "----" "------" "----" "----"
+printf "  %-18s %-28s %-6s %-7s %-16s %s\n" "NAME" "BRANCH" "TMUX" "DIRTY" "LAST COMMIT" "RAM"
+printf "  %-18s %-28s %-6s %-7s %-16s %s\n" "----" "------" "----" "-----" "-----------" "---"
 
 while IFS= read -r dir; do
   [ -z "$dir" ] && continue
@@ -38,17 +40,43 @@ while IFS= read -r dir; do
     name=$(echo "$basename" | sed 's/^website-//')
   fi
 
-  # Get branch
+  # Active marker
+  marker="  "
+  if [ "$name" = "$current_window" ]; then
+    marker="▸ "
+  fi
+
+  # Branch
   branch=$(cd "$dir" && git branch --show-current 2>/dev/null || echo "???")
 
-  # Check tmux
+  # Tmux
   tmux_status="-"
   if echo "$open_windows" | grep -qx "$name"; then
     tmux_status="open"
   fi
 
-  # Disk usage (excluding node_modules for speed)
-  disk=$(du -sh "$dir" 2>/dev/null | awk '{print $1}' || echo "???")
+  # Uncommitted changes
+  change_count=$(cd "$dir" && git status --porcelain 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$change_count" = "0" ]; then
+    dirty="clean"
+  else
+    dirty="${change_count}F"
+  fi
 
-  printf "%-20s %-30s %-8s %s\n" "$name" "$branch" "$tmux_status" "$disk"
+  # Last commit age
+  last_commit=$(cd "$dir" && git log -1 --format="%cr" 2>/dev/null || echo "???")
+
+  # RAM usage — sum RSS of processes whose command line contains this directory
+  pids=$(pgrep -f "$dir" 2>/dev/null || true)
+  ram="-"
+  if [ -n "$pids" ]; then
+    ram_kb=$(echo "$pids" | xargs ps -o rss= -p 2>/dev/null | awk '{sum += $1} END {print sum+0}')
+    if [ "$ram_kb" -gt 1048576 ]; then
+      ram=$(awk "BEGIN {printf \"%.1fG\", $ram_kb/1048576}")
+    elif [ "$ram_kb" -gt 0 ]; then
+      ram=$(awk "BEGIN {printf \"%.0fM\", $ram_kb/1024}")
+    fi
+  fi
+
+  printf "%s%-18s %-28s %-6s %-7s %-16s %s\n" "$marker" "$name" "$branch" "$tmux_status" "$dirty" "$last_commit" "$ram"
 done <<< "$all_dirs"
