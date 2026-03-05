@@ -35,7 +35,7 @@ echo "Copying seeders to api container..."
 echo "$all_changed" | while IFS= read -r file; do
   [ -z "$file" ] && continue
   container_path=$(echo "$file" | sed 's|^api/||')
-  docker cp "$repo_root/$file" "website-api:/app/$container_path"
+  docker cp "$repo_root/$file" "website-api:/usr/src/api/$container_path"
 done
 
 # Undo each changed seeder
