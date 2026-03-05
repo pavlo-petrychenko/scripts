@@ -55,15 +55,16 @@ if [[ "$confirm" != [yY] ]]; then
   exit 0
 fi
 
-# Kill tmux window if it exists
+# Kill tmux window first to stop all processes in the worktree
 if [ -n "${TMUX:-}" ]; then
   target_window_id=$(tmux list-windows -F '#{window_name} #{window_id}' | awk -v n="$name" '$1 == n {print $2}')
   if [ -n "$target_window_id" ]; then
     tmux kill-window -t "$target_window_id"
+    sleep 1
   fi
 fi
 
-# Remove worktree and branch
+# Remove worktree and branch via project Makefile
 cd "$main_repo"
 make worktree-remove name="$name"
 

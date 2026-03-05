@@ -32,13 +32,14 @@ if [[ "$confirm" != [yY] ]]; then
   exit 0
 fi
 
-# Kill all panes except current to stop running processes
-tmux kill-pane -a -t "$window_id" 2>/dev/null || true
+# Kill all other panes to stop running processes (node, logs, etc.)
+tmux kill-pane -a 2>/dev/null || true
+sleep 1
 
-# Move out of the worktree
+# Move out of the worktree so it can be removed
 cd "$main_repo"
 
-# Remove worktree and branch
+# Remove worktree and branch via project Makefile
 make worktree-remove name="$window_name"
 
 # Kill this tmux window
