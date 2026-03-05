@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # wt - create worktree via `make worktree` + tmux window with 3-pane layout
-# Usage: wt <name> [flags...]
+# Usage: wt <name> [-p <prompt>] [flags...]
+#   -p <prompt>   Run claude in plan mode with the given prompt in the agent pane
 #   Flags are forwarded to `make worktree` (e.g. --no-install, --symlink, --verbose)
 #
 # Layout:
@@ -13,13 +14,30 @@
 set -euo pipefail
 
 if [ $# -lt 1 ] || [[ "$1" == --* ]]; then
-  echo "Usage: wt <name> [--no-install] [--no-init] [--verbose] [--full-install] [--symlink]"
+  echo "Usage: wt <name> [-p <prompt>] [--no-install] [--no-init] [--verbose] [--full-install] [--symlink]"
   exit 1
 fi
 
 name="$1"
 shift
-flags="$*"
+
+# Parse -p <prompt> if provided
+prompt=""
+flags=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -p)
+      shift
+      prompt="$1"
+      shift
+      ;;
+    *)
+      flags="$flags $1"
+      shift
+      ;;
+  esac
+done
+flags="${flags# }"
 
 # Must be inside a git repo
 repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || {
@@ -44,6 +62,13 @@ if [ -d "$worktree_dir/.husky" ] && [ ! -d "$worktree_dir/.husky/_" ]; then
   (cd "$worktree_dir" && npx husky 2>/dev/null) || true
 fi
 
+# Build the claude command to send to the agent pane
+claude_cmd=""
+if [ -n "$prompt" ]; then
+  escaped_prompt=$(printf '%s' "$prompt" | sed "s/'/'\\\\''/g")
+  claude_cmd="claude --permission-mode plan -p '${escaped_prompt}'"
+fi
+
 # If not inside tmux, start a new session
 if [ -z "${TMUX:-}" ]; then
   tmux new-session -s "$name" -n "$name" -c "$worktree_dir" \; \
@@ -54,10 +79,16 @@ if [ -z "${TMUX:-}" ]; then
     split-window -v -f -c "$worktree_dir" -l 30% \; \
     select-pane -T "logs" \; \
     select-pane -t 1
+
+  if [ -n "$claude_cmd" ]; then
+    tmux send-keys -t "$name:$name.1" "$claude_cmd" Enter
+  fi
   exit 0
 fi
 
 # Inside tmux — create a new window in the current session
+session=$(tmux display-message -p '#S')
+
 tmux new-window -n "$name" -c "$worktree_dir"
 tmux select-pane -T "agent"
 tmux split-window -h -c "$worktree_dir"
@@ -66,3 +97,7 @@ tmux select-pane -t 1
 tmux split-window -v -f -c "$worktree_dir" -l 30%
 tmux select-pane -T "logs"
 tmux select-pane -t 1
+
+if [ -n "$claude_cmd" ]; then
+  tmux send-keys -t "${session}:${name}.1" "$claude_cmd" Enter
+fi
