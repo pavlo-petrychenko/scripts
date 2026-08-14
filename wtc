@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# wtc - open VS Code in current worktree directory
+# wtc - open Zed in current worktree directory
 # Usage: wtc
+#
+# Runs under tmux and cmux (see wt-mux.sh).
 
-if [ -n "${TMUX:-}" ]; then
-  dir=$(tmux display-message -p '#{pane_current_path}')
-else
-  dir=$(pwd)
-fi
+set -euo pipefail
 
-code "$dir"
+. "${WT_LIB:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/wt-mux.sh}"
+
+zed "$(mux_current_path)"

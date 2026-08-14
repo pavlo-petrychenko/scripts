@@ -1,46 +1,80 @@
 #!/usr/bin/env bash
-# wtd - remove current worktree and close tmux window
-# Must be run from inside a worktree's tmux window
+# wtd - remove the current worktree and close its window
+# Must be run from inside a worktree's window (tmux window or cmux workspace).
+#
+# Runs under tmux and cmux (see wt-mux.sh).
 
 set -euo pipefail
 
-if [ -z "${TMUX:-}" ]; then
-  echo "Error: not inside tmux"
-  exit 1
-fi
+. "${WT_LIB:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/wt-mux.sh}"
 
-window_name=$(tmux display-message -p '#W')
-window_id=$(tmux display-message -p '#{window_id}')
+mux_require tmux cmux || exit 1
 
 repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || {
   echo "Error: not inside a git repo"
   exit 1
 }
 
-main_repo="$(dirname "$repo_root")/website"
+parent_dir=$(dirname "$repo_root")
+main_repo="$parent_dir/website"
 
 if [ ! -d "$main_repo" ]; then
   echo "Error: main repo not found at $main_repo"
   exit 1
 fi
 
+# Take the worktree name from the checkout path, not from the window title. The
+# path is authoritative about what is being deleted; a window title is only a
+# label, and under cmux an unlabelled workspace carries an agent-generated one.
+repo_basename=$(basename "$repo_root")
+if [ "$repo_basename" = "website" ]; then
+  echo "Error: $repo_root is the main repo, not a worktree"
+  exit 1
+fi
+name="${repo_basename#website-}"
+
+# The window to close, which may be titled differently from the worktree
+window_name=$(mux_current_window || true)
+
 # Confirm
-echo "Remove worktree: website-$window_name (branch: $window_name)"
+echo "Remove worktree: website-$name (branch: $name)"
 read -p "Are you sure? (y/N) " confirm
 if [[ "$confirm" != [yY] ]]; then
   echo "Cancelled"
   exit 0
 fi
 
-# Kill all other panes to stop running processes (node, logs, etc.)
-tmux kill-pane -a 2>/dev/null || true
+# Close the other panes to stop running processes (node, logs, etc.). This pane
+# survives, because it is the one running this script.
+mux_kill_other_panes
 sleep 1
+
+# Stop and remove any containers whose bind mounts point into this worktree.
+# Otherwise Docker recreates those bind-mount source paths after deletion
+# (e.g. a restarting nginx container will keep resurrecting the worktree dir).
+if command -v docker >/dev/null 2>&1; then
+  worktree_path="$repo_root"
+  container_ids=$(docker ps -a -q --no-trunc 2>/dev/null | while IFS= read -r cid; do
+    [ -z "$cid" ] && continue
+    if docker inspect "$cid" --format '{{range .Mounts}}{{.Source}}
+{{end}}' 2>/dev/null \
+      | awk -v p="$worktree_path/" 'index($0"/", p)==1 {found=1} END {exit !found}'; then
+      echo "$cid"
+    fi
+  done || true)
+  if [ -n "$container_ids" ]; then
+    echo "Removing containers bound to $worktree_path..."
+    echo "$container_ids" | xargs docker rm -f >/dev/null
+  fi
+fi
 
 # Move out of the worktree so it can be removed
 cd "$main_repo"
 
 # Remove worktree and branch via project Makefile
-make worktree-remove name="$window_name"
+make worktree-remove name="$name"
 
-# Kill this tmux window
-tmux kill-window -t "$window_id"
+# Close this window last — it takes this shell with it
+if [ -n "$window_name" ]; then
+  mux_kill_window "$window_name"
+fi

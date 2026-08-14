@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tp - tmux project launcher with 3-pane layout
+# tp - project launcher with the 3-pane layout
 # Usage: tp <project-name> <project-path>
 #
 # Layout:
@@ -8,31 +8,44 @@
 # ├──────────┴──────────┤
 # │        logs         │
 # └─────────────────────┘
+#
+# Runs under tmux and cmux (see wt-mux.sh). Under tmux each project gets its own
+# session; under cmux each gets a workspace in the current window. The agent pane
+# is a plain shell in both — unlike `wt`, tp does not start an agent session,
+# since it is meant to open several projects at once.
+
+set -euo pipefail
+
+. "${WT_LIB:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/wt-mux.sh}"
 
 name="${1:?Usage: tp <name> <path>}"
 path="${2:?Usage: tp <name> <path>}"
 path=$(cd "$path" 2>/dev/null && pwd)
 
-if tmux has-session -t "$name" 2>/dev/null; then
-  tmux switch-client -t "$name" 2>/dev/null || tmux attach -t "$name"
-  exit 0
-fi
-
-# Create session — agent pane (top-left)
-tmux new-session -d -s "$name" -c "$path"
-tmux select-pane -T "agent"
-
-# Split right — root (top-right)
-tmux split-window -h -c "$path"
-tmux select-pane -T "root"
-
-# Split below full-width — logs (bottom)
-tmux select-pane -t 1
-tmux split-window -v -f -c "$path" -l 30%
-tmux select-pane -T "logs"
-
-# Focus agent pane
-tmux select-pane -t 1
-
-# Attach
-tmux switch-client -t "$name" 2>/dev/null || tmux attach -t "$name"
+case "$(mux_kind)" in
+  cmux)
+    if mux_has_window "$name"; then
+      mux_select_window "$name"
+    else
+      mux_new_window "$name" "$path"
+    fi
+    ;;
+  *)
+    # tmux: one detached session per project, then switch to it. Works both from
+    # inside tmux (switch-client) and outside it (attach).
+    if ! tmux has-session -t "$name" 2>/dev/null; then
+      tmux new-session -d -s "$name" -c "$path" \; \
+        select-pane -T "agent" \; \
+        split-window -h -c "$path" \; \
+        select-pane -T "root" \; \
+        select-pane -t 1 \; \
+        split-window -v -f -c "$path" -l 30% \; \
+        select-pane -T "logs" \; \
+        select-pane -t 1
+    fi
+    # TP_NO_ATTACH lets `workspace` build several sessions in a row without the
+    # first attach blocking the loop.
+    [ -n "${TP_NO_ATTACH:-}" ] && exit 0
+    tmux switch-client -t "$name" 2>/dev/null || tmux attach -t "$name"
+    ;;
+esac

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# wt - create worktree via `make worktree` + tmux window with 3-pane layout
+# wt - create worktree via `make worktree` + a window with the 3-pane layout
 # Usage: wt <name> [-p <prompt>] [flags...]
-#   -p <prompt>   Run claude in plan mode with the given prompt in the agent pane
+#   -p <prompt>   Start the agent in plan mode with the given prompt
 #   Flags are forwarded to `make worktree` (e.g. --no-install, --symlink, --verbose)
 #
 # Layout:
@@ -10,8 +10,14 @@
 # ├──────────┴──────────┤
 # │        logs         │
 # └─────────────────────┘
+#
+# Runs under tmux and cmux (see wt-mux.sh). Under cmux the window is a cmux
+# workspace. The agent pane runs the `claude` CLI on both backends; set
+# WT_NO_AGENT=1 to leave it as a bare shell.
 
 set -euo pipefail
+
+. "${WT_LIB:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/wt-mux.sh}"
 
 if [ $# -lt 1 ] || [[ "$1" == --* ]]; then
   echo "Usage: wt <name> [-p <prompt>] [--no-install] [--no-init] [--verbose] [--full-install] [--symlink]"
@@ -62,42 +68,24 @@ if [ -d "$worktree_dir/.husky" ] && [ ! -d "$worktree_dir/.husky/_" ]; then
   (cd "$worktree_dir" && npx husky 2>/dev/null) || true
 fi
 
-# Build the claude command to send to the agent pane
-claude_cmd=""
-if [ -n "$prompt" ]; then
-  escaped_prompt=$(printf '%s' "$prompt" | sed "s/'/'\\\\''/g")
-  claude_cmd="claude --permission-mode plan -p '${escaped_prompt}'"
-fi
-
-# If not inside tmux, start a new session
-if [ -z "${TMUX:-}" ]; then
-  tmux new-session -s "$name" -n "$name" -c "$worktree_dir" \; \
-    select-pane -T "agent" \; \
-    split-window -h -c "$worktree_dir" \; \
-    select-pane -T "root" \; \
-    select-pane -t 1 \; \
-    split-window -v -f -c "$worktree_dir" -l 30% \; \
-    select-pane -T "logs" \; \
-    select-pane -t 1
-
-  if [ -n "$claude_cmd" ]; then
-    tmux send-keys -t "$name:$name.1" "$claude_cmd" Enter
+# Reuse the window if one already exists for this worktree. Duplicate names would
+# make every later name lookup ambiguous, so never create a second one.
+if mux_has_window "$name"; then
+  echo "Window already exists: $name"
+  mux_select_window "$name"
+  # The agent pane already has a session in it. Typing a fresh `claude` command
+  # into it would land in that session's prompt box rather than a shell.
+  if [ -n "$prompt" ]; then
+    echo "Note: -p ignored, the agent pane is already running. Send the prompt there directly."
   fi
-  exit 0
+else
+  mux_new_window "$name" "$worktree_dir"
+  if [ -n "$prompt" ]; then
+    mux_agent_prompt "$name" "$prompt"
+  else
+    mux_agent_start "$name"
+  fi
 fi
 
-# Inside tmux — create a new window in the current session
-session=$(tmux display-message -p '#S')
-
-tmux new-window -n "$name" -c "$worktree_dir"
-tmux select-pane -T "agent"
-tmux split-window -h -c "$worktree_dir"
-tmux select-pane -T "root"
-tmux select-pane -t 1
-tmux split-window -v -f -c "$worktree_dir" -l 30%
-tmux select-pane -T "logs"
-tmux select-pane -t 1
-
-if [ -n "$claude_cmd" ]; then
-  tmux send-keys -t "${session}:${name}.1" "$claude_cmd" Enter
-fi
+# Only blocks when there was no multiplexer to create the window in.
+mux_attach "$name"

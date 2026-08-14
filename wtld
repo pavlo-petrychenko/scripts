@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
-# wtld - list worktrees and remove a selected one (worktree + tmux window)
+# wtld - list worktrees and remove a selected one (worktree + its window)
+#
+# Runs under tmux and cmux (see wt-mux.sh).
 
 set -euo pipefail
+
+. "${WT_LIB:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/wt-mux.sh}"
 
 repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || {
   echo "Error: not inside a git repo"
@@ -24,15 +28,10 @@ if [ -z "$worktrees" ]; then
   exit 0
 fi
 
-# Mark which ones have tmux windows open
+# Mark which ones already have a window open
 labeled=""
-open_windows=""
-if [ -n "${TMUX:-}" ]; then
-  open_windows=$(tmux list-windows -F '#W' 2>/dev/null || true)
-fi
-
 while IFS= read -r name; do
-  if echo "$open_windows" | grep -qx "$name"; then
+  if mux_has_window "$name"; then
     labeled+="$name  [open]"$'\n'
   else
     labeled+="$name"$'\n'
@@ -55,12 +54,28 @@ if [[ "$confirm" != [yY] ]]; then
   exit 0
 fi
 
-# Kill tmux window first to stop all processes in the worktree
-if [ -n "${TMUX:-}" ]; then
-  target_window_id=$(tmux list-windows -F '#{window_name} #{window_id}' | awk -v n="$name" '$1 == n {print $2}')
-  if [ -n "$target_window_id" ]; then
-    tmux kill-window -t "$target_window_id"
-    sleep 1
+# Close the window first to stop all processes in the worktree
+if mux_has_window "$name"; then
+  mux_kill_window "$name"
+  sleep 1
+fi
+
+# Stop and remove any containers whose bind mounts point into this worktree.
+# Otherwise Docker recreates those bind-mount source paths after deletion
+# (e.g. a restarting nginx container will keep resurrecting the worktree dir).
+if command -v docker >/dev/null 2>&1; then
+  worktree_path="$parent_dir/website-$name"
+  container_ids=$(docker ps -a -q --no-trunc 2>/dev/null | while IFS= read -r cid; do
+    [ -z "$cid" ] && continue
+    if docker inspect "$cid" --format '{{range .Mounts}}{{.Source}}
+{{end}}' 2>/dev/null \
+      | awk -v p="$worktree_path/" 'index($0"/", p)==1 {found=1} END {exit !found}'; then
+      echo "$cid"
+    fi
+  done || true)
+  if [ -n "$container_ids" ]; then
+    echo "Removing containers bound to $worktree_path..."
+    echo "$container_ids" | xargs docker rm -f >/dev/null
   fi
 fi
 

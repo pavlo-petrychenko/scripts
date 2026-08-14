@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 # wtl - list all worktrees with branch, status, and resource info
+#
+# The MUX column shows whether the worktree has a window open in the current
+# multiplexer — a tmux window or a cmux workspace (see wt-mux.sh).
 
 set -euo pipefail
+
+. "${WT_LIB:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/wt-mux.sh}"
 
 repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || {
   echo "Error: not inside a git repo"
@@ -18,20 +23,16 @@ if [ -n "$worktree_dirs" ]; then
   all_dirs="$all_dirs"$'\n'"$worktree_dirs"
 fi
 
-# Get tmux info
-open_windows=""
-current_window=""
-if [ -n "${TMUX:-}" ]; then
-  open_windows=$(tmux list-windows -F '#W' 2>/dev/null || true)
-  current_window=$(tmux display-message -p '#W' 2>/dev/null || true)
-fi
+# Multiplexer info, fetched once rather than per worktree
+open_windows=$(mux_window_names || true)
+current_window=$(mux_current_window || true)
 
 # Get VS Code open folders (one ps call for all)
 vscode_windows=$(ps -eo args= | grep "[E]lectron.*/" || true)
 
 # Header
-printf "  %-18s %-11s %-6s %-6s %-7s %s\n" "NAME" "BRANCH" "TMUX" "CODE" "DIRTY" "LAST COMMIT"
-printf "  %-18s %-11s %-6s %-6s %-7s %s\n" "----" "------" "----" "----" "-----" "-----------"
+printf "  %-18s %-11s %-6s %-6s %-7s %s\n" "NAME" "BRANCH" "MUX" "CODE" "DIRTY" "LAST COMMIT"
+printf "  %-18s %-11s %-6s %-6s %-7s %s\n" "----" "------" "---" "----" "-----" "-----------"
 
 while IFS= read -r dir; do
   [ -z "$dir" ] && continue
@@ -45,7 +46,7 @@ while IFS= read -r dir; do
 
   # Active marker
   marker="  "
-  if [ "$name" = "$current_window" ]; then
+  if [ -n "$current_window" ] && [ "$name" = "$current_window" ]; then
     marker="▸ "
   fi
 
@@ -53,10 +54,10 @@ while IFS= read -r dir; do
   branch=$(cd "$dir" && git branch --show-current 2>/dev/null || echo "???")
   branch="${branch:0:9}"
 
-  # Tmux
-  tmux_status="-"
+  # Window open in the current multiplexer
+  mux_status="-"
   if echo "$open_windows" | grep -qx "$name"; then
-    tmux_status="open"
+    mux_status="open"
   fi
 
   # Uncommitted changes
@@ -76,5 +77,5 @@ while IFS= read -r dir; do
     vscode="open"
   fi
 
-  printf "%s%-18s %-11s %-6s %-6s %-7s %s\n" "$marker" "$name" "$branch" "$tmux_status" "$vscode" "$dirty" "$last_commit"
+  printf "%s%-18s %-11s %-6s %-6s %-7s %s\n" "$marker" "$name" "$branch" "$mux_status" "$vscode" "$dirty" "$last_commit"
 done <<< "$all_dirs"

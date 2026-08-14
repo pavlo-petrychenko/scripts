@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 # workspace - launch all projects
 # Edit the list below with your projects
+#
+# Runs under tmux and cmux (see wt-mux.sh). Each project is opened by `tp`, as a
+# tmux session or a cmux workspace depending on where this runs.
+
+set -euo pipefail
+
+. "${WT_LIB:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/wt-mux.sh}"
 
 projects=(
   "api:$HOME/projects/api"
@@ -8,15 +15,30 @@ projects=(
   "infra:$HOME/projects/infra"
 )
 
-# Start tmux server if not running
+tp_bin="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/tp"
+
+if [ "$(mux_kind)" = "cmux" ]; then
+  first=""
+  for entry in "${projects[@]}"; do
+    name="${entry%%:*}"
+    path="${entry#*:}"
+    [ -d "$path" ] || continue
+    "$tp_bin" "$name" "$path"
+    [ -z "$first" ] && first="$name"
+  done
+  # Land on the first project rather than the last one created
+  [ -n "$first" ] && mux_select_window "$first"
+  exit 0
+fi
+
+# tmux: build every session detached, then attach to the first
 tmux start-server
 
 for entry in "${projects[@]}"; do
   name="${entry%%:*}"
   path="${entry#*:}"
-  [ -d "$path" ] && tp "$name" "$path"
+  [ -d "$path" ] && TP_NO_ATTACH=1 "$tp_bin" "$name" "$path"
 done
 
-# Attach to first project
 first="${projects[0]%%:*}"
 tmux attach -t "$first"
